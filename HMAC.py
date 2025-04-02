@@ -8,7 +8,8 @@ def create_hmac(key, message):
         message = message.encode()
     return hmac.new(key, message, hashlib.sha256).hexdigest()
 
-# Verify HMAC matches
+# Verify HMAC mals
+# tches
 def verify_hmac(key, message, received_hmac):
     expected_hmac = create_hmac(key, message)
     return hmac.compare_digest(expected_hmac, received_hmac)
