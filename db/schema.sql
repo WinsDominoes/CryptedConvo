@@ -13,8 +13,7 @@ USE cryptedconvo;
 DROP TABLE IF EXISTS users;
 
 CREATE TABLE users (
-    id int(10) NOT NULL PRIMARY KEY,
-    username VARCHAR(160) NOT NULL,
-    salt TEXT(1024) NOT NULL,
-    password_hash(1024) NOT NULL,
+    username VARCHAR(64) PRIMARY KEY,  -- Unique identifier
+    salt BINARY(16) NOT NULL,          -- Exact storage for os.urandom(16)
+    password_hash CHAR(64) NOT NULL 
 )
