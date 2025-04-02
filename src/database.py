@@ -1,5 +1,5 @@
 import mysql.connector.pooling
-from encryption import HMAC_encryptor
+from src.encryption import HMAC_encryptor
 import os
 
 class DatabaseHandler:
