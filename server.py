@@ -1,7 +1,7 @@
+from encryption import RSA_encryptor, HMAC_encryptor
 import socket
 import threading
 import os
-from encryption import encryption as encryption
 
 class Server:
 
@@ -27,11 +27,11 @@ class Server:
 
     def exchange_keys(self):
         # Send server public key to the client
-        self.client_socket.send(encryption.get_public_key)
+        self.client_socket.send(RSA_encryptor.get_public_key)
 
         # Receive client's public key
         client_public_key = self.client_socket.recv(1024)
-        encryption.set_public_key(client_public_key)
+        RSA_encryptor.set_public_key(client_public_key)
         print("Exchanged public keys with client.")
 
     def talk_to_client(self):
@@ -44,11 +44,11 @@ class Server:
             try:
                 server_message = input('')
                 if server_message.strip().lower() == 'close':
-                    self.client_socket.send(encryption.encrypt_message('close'))
+                    self.client_socket.send(RSA_encryptor.encrypt_message('close'))
                     self.close_connection()
                     break
                 message_with_name = f"{self.name}: {server_message}"
-                encrypted_message = encryption.encrypt_message(message_with_name)
+                encrypted_message = RSA_encryptor.encrypt_message(message_with_name)
                 self.client_socket.send(encrypted_message)
             except OSError:
                 print("Cannot send message, client socket is closed")
@@ -63,7 +63,7 @@ class Server:
                     self.close_connection()
                     break
 
-                client_message = encryption.decrypt_message(data)
+                client_message = RSA_encryptor.decrypt_message(data)
 
                 if client_message.strip().lower() == 'close':
                     print("Client requested to close the connection.")
@@ -84,3 +84,8 @@ class Server:
         self.client_socket.close()
         self.socket.close()
         os._exit(0) 
+
+if __name__ == "__main__":
+    SERVER_HOST = 'localhost'
+    SERVER_PORT = 12345
+    server = Server(SERVER_HOST, SERVER_PORT)
