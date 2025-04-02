@@ -1,0 +1,14 @@
+version: '3.5'
+
+services:
+  mariadb:
+    image: mariadb
+    environment:
+      MYSQL_ROOT_PASSWORD: hello123
+      MYSQL_USER: winsdominoes
+      MYSQL_PASSWORD: hello123
+      MYSQL_DATABASE: cryptedconvo
+    ports:
+      - "3306:3306"
+    volumes:
+      - "./schema.sql:/docker-entrypoint-initdb.d/1.sql"
