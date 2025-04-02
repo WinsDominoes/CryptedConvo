@@ -1,16 +1,36 @@
 from rsa.key import newkeys
 import rsa
 
+from dotenv import load_dotenv
 import hmac
 import hashlib
 import os
 
-class HMAC_encryptor():
-    # Create HMAC-SHA256 hash ith optional secret key
-    def __init__(self, secret_key=None):
-        self.secret_key = secret_key if secret_key else os.urandom(32)
+class HMAC_encryptor:
 
-    # Create HMAC-SHA256 hash of a message
+    # Initialize with secret key from .env 
+    def __init__(self):
+        load_dotenv()  # Load environment variables
+        self.secret_key = self._load_key_from_env()
+        if not self.secret_key:
+            raise ValueError("No HMAC secret key found. Set HMAC_SECRET in .env or pass explicitly")
+
+    # Load key from .env file, converting hex string to bytes if needed
+    def _load_key_from_env(self):
+        key_str = os.getenv('HMAC_KEY')
+        if not key_str:
+            return None
+        
+        # If key is in hex format (e.g., from os.urandom().hex())
+        if len(key_str) == 64:  # 32-byte key in hex
+            try:
+                return bytes.fromhex(key_str)
+            except ValueError:
+                pass
+                
+        return key_str.encode('utf-8')  # Fallback to UTF-8 encoded string
+
+    # Create HMAC-SHA256 hash of message with optional salt
     def create_hash(self, message, salt=None):
         if isinstance(message, str):
             message = message.encode('utf-8')
@@ -20,15 +40,23 @@ class HMAC_encryptor():
             
         return hmac.new(self.secret_key, message, hashlib.sha256).hexdigest()
 
-    # Verify if HMAC matches expected value
+    # Verify HMAC matches expected value
     def verify_hash(self, message, received_hash, salt=None):
         expected_hash = self.create_hash(message, salt)
         return hmac.compare_digest(expected_hash, received_hash)
 
-    # Generate a random 16-byte salt
+    # Generate random 16-byte salt
     @staticmethod
     def generate_salt():
         return os.urandom(16)
+
+    # Generate a .env template with random key
+    @staticmethod
+    def generate_env_template():
+        key = os.urandom(32)
+        with open('.env.template', 'w') as f:
+            f.write(f"# HMAC Secret Key (32 bytes)\nHMAC_KEY={key.hex()}\n")
+        return key
 
 class RSA_encryptor():
     def __init__(self, key_size=1024):
