@@ -1,6 +1,7 @@
-from src.encryption import HMAC_encryptor, RSA_encryptor
+from encryption import HMAC_encryptor, RSA_encryptor
 import socket
 import threading
+import os
 
 class Client:
     def __init__(self, HOST, PORT=9999):
@@ -9,111 +10,155 @@ class Client:
 
         self.hmac = HMAC_encryptor()
         self.rsa = RSA_encryptor()
-        self.connected = False
+        self.username = ''
 
-    # Establish connection with server and exchange keys
-    def connect_to_server(self, host, port):
-        try:
-            self.socket.connect((self.host, self.port))
-            print("Connected to server!")
-            
-            # Exchange public keys with server
-            self.socket.send(self.rsa.get_public_key())
-            server_key = self.socket.recv(4096)
-            self.rsa.set_public_key(server_key)
-            
-            self.connected = True
-            return True
-        except Exception as e:
-            print(f"Connection failed: {e}")
+    # Exchange RSA public keys with server
+    def exchange_keys(self):
+        # Send client's public key to server
+        self.socket.send(self.rsa.get_public_key())
+        
+        # Receive server's public key
+        server_key_data = self.socket.recv(4096)
+        self.rsa.set_public_key(server_key_data)
+
+    # Encrypt message with server's public key before sending
+    def send_encrypted(self, message: str) -> None:
+        encrypted = self.rsa.encrypt_message(message)
+        self.socket.send(encrypted)
+
+
+    # Handle login/registration with HMAC authentication
+    def handle_authentication(self):
+        while True:
+            print("\n1. LOGIN")
+            print("2. REGISTER")
+            print("3. EXIT")
+            choice = input("Choose option (1-3): ").strip()
+
+            if choice == '1':
+                err = self.handle_login()
+            elif choice == '2':
+                err = self.handle_register()
+            elif choice == '3':
+                self.send_encrypted("EXIT")
+                os.exit(1)
+            else:
+                print("Invalid choice")
+
+            if not err:
+                print("Error has occured during authentication process")
+                os.exit(1)
+
+    def handle_register(self) -> bool:
+        username = input("New username: ").strip()
+        password = input("New password: ").strip()
+        
+        # Generate new salt and HMAC hash
+        salt = self.hmac.generate_salt()
+        password_hash = self.hmac.create_hash(password, salt)
+        
+        # Send encrypted registration as SINGLE packet
+        reg_packet = f"REGISTER {username} {password_hash} {salt.hex()}"
+        self.send_encrypted(reg_packet)
+        
+        # Get server response
+        response = self.rsa.decrypt_message(self.socket.recv(4096))
+        print(f"Server response: {response}")
+        if not response.startswith('REGISTER'):
             return False
 
-    # Handle login/registration with HMAC authentication"""
-    def authenticate(self, action, username, password):
-        try:
-            # Send action (LOGIN/REGISTER)
-            self.socket.send(action.encode())
-            
-            # Create salted HMAC of credentials
-            salt = HMAC_encryptor.generate_salt()
-            credentials = f"{username}:{password}"
-            hmac_digest = self.hmac.create_hash(credentials, salt)
-            
-            # Send salt|credentials|hmac
-            auth_data = f"{salt.hex()}|{credentials}|{hmac_digest}"
-            encrypted_auth = self.rsa.encrypt_message(auth_data)
-            self.socket.send(encrypted_auth)
-            
-            # Get server response
-            response = self.socket.recv(4096)
-            decrypted_response = self.rsa.decrypt_message(response)
-            return decrypted_response
-        except Exception as e:
-            print(f"Authentication error: {e}")
-            return "AUTH_FAILED"
+        self.username = username
+        return True
 
-    # Handle outgoing encrypted messages
-    def send_messages(self):
-        while self.connected:
-            try:
-                message = input("> ")
-                if message.lower() == 'exit':
-                    break
-                    
-                encrypted_msg = self.rsa.encrypt_message(message)
-                self.socket.send(encrypted_msg)
-            except Exception as e:
-                print(f"Sending error: {e}")
-                break
+    def handle_login(self) -> bool:
+        username = input("Username: ").strip()
+        password = input("Password: ").strip()
+        
+        # Request salt from server
+        self.send_encrypted(f"GET_SALT {username}")
+        salt_hex = self.rsa.decrypt_message(self.socket.recv(4096))
+        salt = bytes.fromhex(salt_hex)
+        
+        # Create HMAC hash
+        password_hash = self.hmac.create_hash(password, salt)
+        
+        # Send encrypted credentials as SINGLE packet
+        auth_packet = f"LOGIN {username} {password_hash}"
+        self.send_encrypted(auth_packet)
+        
+        # Get server response
+        response = self.rsa.decrypt_message(self.socket.recv(4096))
+        print(f"Server response: {response}")
+        if response.startswith('LOGIN'):
+            return False
 
-    # Handle incoming encrypted messages"""
+        self.username = username
+        return True
+
+     # Receive messages
     def receive_messages(self):
-        while self.connected:
-            try:
-                encrypted_msg = self.socket.recv(4096)
-                if not encrypted_msg:
-                    break
-                    
-                message = self.rsa.decrypt_message(encrypted_msg)
-                print(f"\n[Server]: {message}")
-            except Exception as e:
-                print(f"Receiving error: {e}")
-                break
-
-    # Main client interface
-    def start(self):
-        if not self.connect_to_server():
-            return
-            
         while True:
-            print("\n1. Register")
-            print("2. Login")
-            print("3. Exit")
-            choice = input("Choose an option: ")
-            
-            if choice == "3":
-                break
+            try:
+                encrypted_data  = self.socket.recv(4096)
+                if not encrypted_data :
+                    raise ConnectionError("Server disconnected")
                 
-            username = input("Username: ")
-            password = input("Password: ")
-            
-            action = "REGISTER" if choice == "1" else "LOGIN"
-            response = self.authenticate(action, username, password)
-            
-            if response == "AUTH_SUCCESS":
-                print("Authentication successful! Start messaging (type 'exit' to quit)")
-                # Start message threads
-                receive_thread = threading.Thread(target=self.receive_messages)
-                receive_thread.daemon = True
-                receive_thread.start()
+               # Decrypt using client's private key
+                message = self.rsa.decrypt_message(encrypted_data )
                 
-                self.send_messages()
-                break
-            else:
-                print(f"Authentication failed: {response}")
+                # Parse message type
+                if message.startswith("USER_OFFLINE"):
+                    _, user = message.split(maxsplit=1)
+                    print(f'{user} is offline')
+                elif message.startswith("NOTFOUND"):
+                    _, msg = message.split(maxsplit=1)
+                    print(f'{msg}')
+                elif message.startswith("@"):
+                    user = message[1:].split(maxsplit=1)[1]
+                    print(f"\n[Incoming] {user}: {message.split(maxsplit=1)[2]}\n> ", end='')
+                elif message.startswith("LISTED"):
+                    self.handle_command("\n" + message[6:])
+                else:
+                    print(f"\n[System] {message}\n> ", end='')
+
+            except ConnectionResetError:
+                print("\nServer connection lost")
+                os._exit(1)
+            except Exception as e:
+                print(f"\nDecryption error: {e}")
+                continue
+
+     # Establish connection with server and exchange keys
+    def start(self):
+        try:
+            self.socket.connect((self.host, self.port))
+            print("Connected to server")
+            self.exchange_keys()
+            self.handle_authentication()
+
+            threading.Thread(target=self.receive_messages, daemon=True).start()
+            # Handle user input
+            while True:
+                message = input()
                 
-        self.socket.close()
-        print("Disconnected from server.")
+                if message.lower().startswith('/exit'):
+                    self.send_encrypted("EXIT")
+                    break
+                elif message.lower().startswith('/help'):
+                    print("\nCommands:")
+                    print("/exit - Disconnect")
+                    print("/list - Request online users")
+                    print("/chat <user> <text_msg>\n")
+                elif message.lower().startswith('/list'):
+                    self.send_encrypted(f"LIST")
+                elif message.lower().startswith('/send'):
+                    self.send_encrypted(f"@{message.split(maxsplit=2)[1]} {message.split(maxsplit=2)[2]}")
+                else:
+                    self.send_encrypted(message)
+        except ConnectionRefusedError:
+            print("Server unavailable")
+        finally:
+            self.socket.close()
 
 if __name__ == "__main__":
     client = Client()

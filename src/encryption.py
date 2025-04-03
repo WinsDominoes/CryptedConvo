@@ -2,6 +2,7 @@ from rsa.key import newkeys
 import rsa
 
 from dotenv import load_dotenv
+import shutil
 import hmac
 import hashlib
 import os
@@ -10,9 +11,13 @@ class HMAC_encryptor:
 
     # Initialize with secret key from .env 
     def __init__(self):
+        if not os.path.exists('.env'):
+            HMAC_encryptor.generate_env_template()  # Create template
+            shutil.copy('.env.template', '.env')    # Copy to .env
         load_dotenv()  # Load environment variables
         self.secret_key = self._load_key_from_env()
         if not self.secret_key:
+
             raise ValueError("No HMAC secret key found. Set HMAC_SECRET in .env or pass explicitly")
 
     # Load key from .env file, converting hex string to bytes if needed
@@ -40,23 +45,22 @@ class HMAC_encryptor:
             
         return hmac.new(self.secret_key, message, hashlib.sha256).hexdigest()
 
-    # Verify HMAC matches expected value
-    def verify_hash(self, message, received_hash, salt=None):
-        expected_hash = self.create_hash(message, salt)
-        return hmac.compare_digest(expected_hash, received_hash)
+# Verify HMAC matches expected value
+def verify_hash(received_hash, expected_hash):
+    return hmac.compare_digest(received_hash, expected_hash)
 
-    # Generate random 16-byte salt
-    @staticmethod
-    def generate_salt():
-        return os.urandom(16)
+# Generate random 16-byte salt
+@staticmethod
+def generate_salt():
+    return os.urandom(16)
 
-    # Generate a .env template with random key
-    @staticmethod
-    def generate_env_template():
-        key = os.urandom(32)
-        with open('.env.template', 'w') as f:
-            f.write(f"# HMAC Secret Key (32 bytes)\nHMAC_KEY={key.hex()}\n")
-        return key
+# Generate a .env template with random key
+@staticmethod
+def generate_env_template():
+    key = os.urandom(32)
+    with open('.env.template', 'w') as f:
+        f.write(f"# HMAC Secret Key (32 bytes)\nHMAC_KEY={key.hex()}\n")
+    return key
 
 class RSA_encryptor():
     def __init__(self, key_size=1024):

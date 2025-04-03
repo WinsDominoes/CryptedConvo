@@ -1,5 +1,5 @@
 import mysql.connector.pooling
-from src.encryption import HMAC_encryptor
+from encryption import verify_hash
 import os
 
 class DatabaseHandler:
@@ -13,7 +13,6 @@ class DatabaseHandler:
         self.schema_path = '../db/schema.sql'
         self.connection_pool = self._create_pool()
         self.initialize_database()
-        self.HMAC = HMAC_encryptor()
 
     # Initialize connection pool
     def _create_pool(self):
@@ -65,8 +64,41 @@ class DatabaseHandler:
             print(f"Registration error: {e}")
             return False
 
+    def get_user_info(self, username: str) -> tuple[bytes, str] | tuple[None, None]:
+        try:
+            with self.get_connection() as conn, \
+                conn.cursor(dictionary=True) as cursor:
+                
+                cursor.execute("""
+                    SELECT salt, password_hash 
+                    FROM users 
+                    WHERE username = %s
+                """, (username,))
+                
+                if (result := cursor.fetchone()):
+                    return (result['salt'], result['password_hash'])
+                return (None, None)
+        except Exception as e:
+            print(f"Database fetch error: {e}")
+            return (None, None)
+        
     # Verify credentials against stored HMAC hash
-    def verify_user(self, username: str, password: str) -> bool:
+    def verify_user(self, username: str, hashed_pass: str) -> bool:
+        try:
+            # Get stored salt and hash from database
+            stored_salt, stored_hash = self.get_user_info(username)
+            if not stored_salt:
+                return False  # User doesn't exist
+
+            # Compare with constant-time comparison
+            return verify_hash(hashed_pass, stored_hash)
+            
+        except Exception as e:
+            print(f"Verification error for {username}: {e}")
+            return False
+            
+    # Verify credentials against stored HMAC hash
+    def get_salt(self, username: str) -> bytes:
         try:
             with self.get_connection() as conn, \
                 conn.cursor(dictionary=True) as cursor:
@@ -79,10 +111,10 @@ class DatabaseHandler:
                 user_data = cursor.fetchone()
                 
                 if not user_data:
-                    return False
+                    return None
                 
-                return self.HMAC.verify_hash(password, user_data['password_hash'], salt=user_data['salt'])
+                return user_data[0]
                 
         except Exception as e:
-            print(f"Verification error: {e}")
-            return False
+            print(f"Fetch error: {e}")
+            return None
