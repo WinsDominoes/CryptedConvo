@@ -6,6 +6,7 @@ class DatabaseHandler:
     def __init__(self):
         self.config = {
             'host': 'localhost',
+            'port': 3306,
             'user': 'root',
             'password': 'password',
             'database': 'data_privacy'
@@ -26,25 +27,26 @@ class DatabaseHandler:
     def get_connection(self):
         return self.connection_pool.get_connection()
 
-    # Create database and tables using pooling
+    # Initialize database and tables if needed
     def initialize_database(self):
+        if not os.path.exists(self.schema_path):
+            raise FileNotFoundError(f"Schema file not found at {self.schema_path}")
+
         try:
-            # Temporary config without database name
             temp_config = self.config.copy()
             temp_config.pop('database')
-            
+
             with mysql.connector.connect(**temp_config) as temp_conn, \
                  temp_conn.cursor() as cursor:
-                
-                # Create database if not exists
+
                 cursor.execute(f"CREATE DATABASE IF NOT EXISTS {self.config['database']}")
                 cursor.execute(f"USE {self.config['database']}")
-                
-                # Execute schema
+
                 with open(self.schema_path, 'r') as sql_file:
                     cursor.execute(sql_file.read(), multi=True)
+
                 temp_conn.commit()
-                
+
         except Exception as e:
             raise Exception(f"Database init failed: {e}")
 
@@ -64,18 +66,17 @@ class DatabaseHandler:
             print(f"Registration error: {e}")
             return False
 
+     # Get salt and hashed password for a given user
     def get_user_info(self, username: str) -> tuple[bytes, str] | tuple[None, None]:
         try:
-            with self.get_connection() as conn, \
-                conn.cursor(dictionary=True) as cursor:
-                
+            with self.get_connection() as conn, conn.cursor(dictionary=True) as cursor:
                 cursor.execute("""
-                    SELECT salt, password_hash 
-                    FROM users 
+                    SELECT salt, password_hash
+                    FROM users
                     WHERE username = %s
                 """, (username,))
-                
-                if (result := cursor.fetchone()):
+                result = cursor.fetchone()
+                if result:
                     return (result['salt'], result['password_hash'])
                 return (None, None)
         except Exception as e:
@@ -89,32 +90,18 @@ class DatabaseHandler:
             stored_salt, stored_hash = self.get_user_info(username)
             if not stored_salt:
                 return False  # User doesn't exist
-
-            # Compare with constant-time comparison
             return verify_hash(hashed_pass, stored_hash)
-            
         except Exception as e:
             print(f"Verification error for {username}: {e}")
             return False
             
-    # Verify credentials against stored HMAC hash
-    def get_salt(self, username: str) -> bytes:
+    # Get only the salt for a user (e.g., during login start)
+    def get_salt(self, username: str) -> bytes | None:
         try:
-            with self.get_connection() as conn, \
-                conn.cursor(dictionary=True) as cursor:
-                
-                cursor.execute("""
-                    SELECT salt, password_hash 
-                    FROM users 
-                    WHERE username = %s
-                """, (username,))
+            with self.get_connection() as conn, conn.cursor(dictionary=True) as cursor:
+                cursor.execute("SELECT salt FROM users WHERE username = %s", (username,))
                 user_data = cursor.fetchone()
-                
-                if not user_data:
-                    return None
-                
-                return user_data[0]
-                
+                return user_data['salt'] if user_data else None
         except Exception as e:
             print(f"Fetch error: {e}")
             return None
