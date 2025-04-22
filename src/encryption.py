@@ -7,12 +7,23 @@ import hmac
 import hashlib
 import os
 
+# Generate random 16-byte salt
+def generate_salt():
+    return os.urandom(16)
+
+# Generate a .env template with random key
+def generate_env_template():
+    key = os.urandom(32)
+    with open('.env.template', 'w') as f:
+        f.write(f"# HMAC Secret Key (32 bytes)\nHMAC_KEY={key.hex()}\n")
+    return key
+
 class HMAC_encryptor:
 
     # Initialize with secret key from .env 
     def __init__(self):
         if not os.path.exists('.env'):
-            HMAC_encryptor.generate_env_template()  # Create template
+            generate_env_template()  # Create template
             shutil.copy('.env.template', '.env')    # Copy to .env
         load_dotenv()  # Load environment variables
         self.secret_key = self._load_key_from_env()
@@ -34,7 +45,7 @@ class HMAC_encryptor:
                 pass
                 
         return key_str.encode('utf-8')  # Fallback to UTF-8 encoded string
-
+    
     # Create HMAC-SHA256 hash of message with optional salt
     def create_hash(self, message, salt=None):
         if isinstance(message, str):
@@ -44,23 +55,11 @@ class HMAC_encryptor:
             message = salt + message
             
         return hmac.new(self.secret_key, message, hashlib.sha256).hexdigest()
-
-# Verify HMAC matches expected value
-def verify_hash(received_hash, expected_hash):
-    return hmac.compare_digest(received_hash, expected_hash)
-
-# Generate random 16-byte salt
-@staticmethod
-def generate_salt():
-    return os.urandom(16)
-
-# Generate a .env template with random key
-@staticmethod
-def generate_env_template():
-    key = os.urandom(32)
-    with open('.env.template', 'w') as f:
-        f.write(f"# HMAC Secret Key (32 bytes)\nHMAC_KEY={key.hex()}\n")
-    return key
+   
+    # Verify HMAC matches expected value
+    @staticmethod
+    def verify_hash(received_hash, expected_hash):
+        return hmac.compare_digest(received_hash, expected_hash)
 
 class RSA_encryptor():
     def __init__(self, key_size=1024):
@@ -78,8 +77,9 @@ class RSA_encryptor():
     def decrypt_message(self, encrypted_message):
         try:
             return rsa.decrypt(encrypted_message, self.private_key).decode('utf-8')
-        except rsa.DecryptionError:
-            return "Decryption failed."
+        except rsa.DecryptionError as e:
+            print(f"[RSA] Decryption failed: {e}")
+            return None
         
     def get_public_key(self) -> bytes:
         return self.public_key.save_pkcs1()

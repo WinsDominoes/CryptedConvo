@@ -1,102 +1,156 @@
-from database import DatabaseHandler
-from encryption import RSA_encryptor
-from typing import Dict
 import socket
 import threading
+import os
+from encryption import RSA_encryptor
 
 class Server:
-    def __init__(self, HOST, PORT=9999):
-        self.db = DatabaseHandler()
+    def __init__(self, HOST='localhost', PORT=9999):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket.bind((HOST, PORT))
-        self.socket.listen(5)
-        
-        self.clients: Dict[str, Dict] = {}  # {username: {'socket': socket, 'rsa': RSA_encryptor}}
-        self.server_rsa = RSA_encryptor()
-        self.server_rsa.generate_keys()
-        
-        print(f"Server running on {HOST}:{PORT}")
-        threading.Thread(target=self.accept_connections, daemon=True).start()
+        self.socket.settimeout(1.0)
+        self.host = HOST
+        self.port = PORT
+        self.clients = {}  # Store connected clients and their data (username, public key)
+        self.rsa = RSA_encryptor()
 
-    def accept_connections(self):
-        while True:
-            client_socket, addr = self.socket.accept()
-            threading.Thread(target=self.handle_client, args=(client_socket,)).start()
+    # Start the server to accept connectionsss
+    def start(self):
+        self.socket.bind((self.host, self.port))
+        self.socket.listen(5)  # Listen for up to 5 clients
+        print(f"Server started at {self.host}:{self.port}")
 
-    def handle_client(self, sock: socket.socket):
         try:
-            # Key exchange
-            sock.send(self.server_rsa.get_public_key())
-            client_rsa = RSA_encryptor()
-            client_rsa.set_public_key(sock.recv(4096))
-            
-            # Authentication
-            username = self.authenticate(sock, client_rsa)
-            if not username:
-                return
-                
-            # Message handling
             while True:
-                encrypted = sock.recv(4096)
-                if not encrypted:
-                    break
-                
-                msg = client_rsa.decrypt_message(encrypted)
-                if msg.startswith('EXIT'):
-                    break
-                self.handle_message(username, msg, sock, client_rsa)
-                
-        except Exception as e:
-            print(f"Client error: {e}")
+                try:
+                    client_socket, client_address = self.socket.accept()
+                    print(f"New connection from {client_address}")
+                    threading.Thread(target=self.handle_client, args=(client_socket,), daemon=True).start()
+                except socket.timeout:
+                    continue  # Just re-loop and wait for the next connection
+        except KeyboardInterrupt:
+            pass
         finally:
-            if username in self.clients:
-                del self.clients[username]
-            sock.close()
+            self.socket.close()
+            print("Server Socket closed.")
 
-    def authenticate(self, sock: socket.socket, rsa: RSA_encryptor) -> str:
+    # Handle client communication
+    def handle_client(self, client_socket):
+        # Exchange RSA public keys
+        self.exchange_keys(client_socket)
+
+        # Handle authentication (Login/Registration)
+        self.handle_authentication(client_socket)
+
         while True:
-            encrypted = sock.recv(4096)
-            if not encrypted:
-                return ""
-                
             try:
-                msg = self.server_rsa.decrypt_message(encrypted)
-                
-                if msg.startswith("REGISTER"):
-                    _, user, pwd_hash, salt = msg.split(maxsplit=3)
-                    if self.db.register_user(user, pwd_hash, bytes.fromhex(salt)):
-                        sock.send(rsa.encrypt_message("REGISTER_SUCCESS"))
-                        self.clients[user] = {'socket': sock, 'rsa': rsa}
-                        return user
+                message = self.rsa.decrypt_message(client_socket.recv(4096))
+                if not message:
+                    raise ConnectionResetError("Client disconnected")
 
-                elif msg.startswith("GET_SALT"):
-                    _, username = msg.split(maxsplit=1)
-                    salt = self.db_handler.get_salt(username)  # Implement this in DatabaseHandler
-                    sock.send(rsa.encrypt_message(salt.hex()))
+                print(f"Received message: {message}")
+                self.handle_message(client_socket, message)
 
-                elif msg.startswith("LOGIN"):
-                    _, user, pwd_hash = msg.split(maxsplit=2)
-                    if self.db.verify_user(user, pwd_hash):
-                        sock.send(rsa.encrypt_message("LOGIN_SUCCESS"))
-                        self.clients[user] = {'socket': sock, 'rsa': rsa}
-                        return user
-                        
-                sock.send(rsa.encrypt_message("AUTH_FAILED"))
-            except:
-                sock.send(rsa.encrypt_message("INVALID_REQUEST"))
+            except (ConnectionResetError, Exception) as e:
+                print(f"Error: {e}")
+                self.remove_client(client_socket)
+                break
 
-    def handle_message(self, sender: str, msg: str, sock: socket.socket, rsa: RSA_encryptor):
-        if msg.startswith("@"):  # Format: "@username message"
-            target, _, message = msg[1:].partition(' ')
-            if target in self.clients:
-                target_data = self.clients[target]
-                encrypted = target_data['rsa'].encrypt_message(f"@{sender}: {message}")
-                target_data['socket'].send(encrypted)
+    # RSA Key exchange between server and client
+    def exchange_keys(self, client_socket):
+        # Receive client's public key
+        client_pub_key = client_socket.recv(4096)
+        self.rsa.set_public_key(client_pub_key)
+
+        # Send server's public key to client
+        client_socket.send(self.rsa.get_public_key())
+
+    # Handle authentication - Login or Register
+    def handle_authentication(self, client_socket):
+        while True:
+            message = self.rsa.decrypt_message(client_socket.recv(4096))
+            print(f"Authentication message: {message}")
+
+            if message.startswith("REGISTER"):
+                self.handle_register(client_socket, message)
+            elif message.startswith("LOGIN"):
+                self.handle_login(client_socket, message)
+            elif message.startswith("GET_SALT"):
+                self.handle_salt_request(client_socket, message)
             else:
-                sock.send(rsa.encrypt_message(f"NOTFOUND User {target} not found"))
-        elif msg == "LIST":  # List online users
-            online_users = [u for u in self.clients if u != sender]
-            response = "ONLINE: " + ", ".join(online_users) if online_users else "No other users" 
+                print(f"Invalid message during authentication: {message}")
+                client_socket.send(self.rsa.encrypt_message("Invalid request"))
+
+    # Handle registration
+    def handle_register(self, client_socket, message):
+        _, username, password_hash, salt_hex = message.split()
+        salt = bytes.fromhex(salt_hex)
+
+        # Check if the user already exists
+        if username in self.clients:
+            client_socket.send(self.rsa.encrypt_message(f"REGISTER FAILED {username} already exists"))
+            return
+
+        # Save user credentials (You should ideally hash and store them in a secure database)
+        self.clients[username] = {'password_hash': password_hash, 'salt': salt, 'socket': client_socket}
+        client_socket.send(self.rsa.encrypt_message(f"REGISTER SUCCESS {username} registered"))
+
+    # Handle login
+    def handle_login(self, client_socket, message):
+        _, username, password_hash = message.split()
+
+        # Check if user exists and the hash matches
+        if username not in self.clients or self.clients[username]['password_hash'] != password_hash:
+            client_socket.send(self.rsa.encrypt_message("LOGIN FAILED Invalid username or password"))
+        else:
+            client_socket.send(self.rsa.encrypt_message(f"LOGIN SUCCESS Welcome back, {username}"))
+            self.clients[username]['socket'] = client_socket
+
+    # Handle salt request for login
+    def handle_salt_request(self, client_socket, message):
+        _, username = message.split()
+
+        # Check if the user exists
+        if username not in self.clients:
+            client_socket.send(self.rsa.encrypt_message("NOTFOUND User not found"))
+        else:
+            # Send the salt to the client
+            salt = self.clients[username]['salt']
+            client_socket.send(self.rsa.encrypt_message(salt.hex()))
+
+    # Handle receiving messages from clients
+    def handle_message(self, client_socket, message):
+        if message.startswith("@"):  # Private message format: @username message
+            target_user, message_content = message[1:].split(maxsplit=1)
+            self.send_private_message(target_user, message_content, client_socket)
+        elif message.startswith("LIST"):
+            self.handle_list(client_socket)
+        elif message.startswith("EXIT"):
+            self.remove_client(client_socket)
+            client_socket.close()
+
+    # Send a private message to a specific user
+    def send_private_message(self, target_user, message, sender_socket):
+        if target_user not in self.clients:
+            sender_socket.send(self.rsa.encrypt_message(f"NOTFOUND {target_user} not found"))
+            return
+
+        target_socket = self.clients[target_user]['socket']
+        encrypted_message = self.rsa.encrypt_message(f"@{self.clients[target_user]['username']} {message}")
+        target_socket.send(encrypted_message)
+        sender_socket.send(self.rsa.encrypt_message(f"Message sent to {target_user}: {message}"))
+
+    # Handle the /list command
+    def handle_list(self, client_socket):
+        online_users = [user for user, data in self.clients.items() if data['socket'] is not None]
+        client_socket.send(self.rsa.encrypt_message(f"LISTED {', '.join(online_users)}"))
+
+    # Remove a client from the list of connected clients
+    def remove_client(self, client_socket):
+        for username, data in list(self.clients.items()):
+            if data['socket'] == client_socket:
+                print(f"Client {username} disconnected")
+                self.clients[username]['socket'] = None
+                break
 
 if __name__ == "__main__":
-    server = Server('localhost', 12345)
+    server = Server('localhost', 12345)  # Adjust with the correct host and port
+    server.start()
