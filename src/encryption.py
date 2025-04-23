@@ -7,28 +7,15 @@ import hmac
 import hashlib
 import os
 
-# Generate random 16-byte salt
-def generate_salt():
-    return os.urandom(16)
-
-# Generate a .env template with random key
-def generate_env_template():
-    key = os.urandom(32)
-    with open('.env.template', 'w') as f:
-        f.write(f"# HMAC Secret Key (32 bytes)\nHMAC_KEY={key.hex()}\n")
-    return key
-
 class HMAC_encryptor:
 
     # Initialize with secret key from .env 
     def __init__(self):
         if not os.path.exists('.env'):
-            generate_env_template()  # Create template
-            shutil.copy('.env.template', '.env')    # Copy to .env
+            self.generate_env_template()  # Create template
         load_dotenv()  # Load environment variables
         self.secret_key = self._load_key_from_env()
         if not self.secret_key:
-
             raise ValueError("No HMAC secret key found. Set HMAC_SECRET in .env or pass explicitly")
 
     # Load key from .env file, converting hex string to bytes if needed
@@ -61,6 +48,19 @@ class HMAC_encryptor:
     def verify_hash(received_hash, expected_hash):
         return hmac.compare_digest(received_hash, expected_hash)
 
+    # Generate random 16-byte salt
+    @staticmethod
+    def generate_salt():
+        return os.urandom(16)
+
+    # Generate a .env template with random key
+    @staticmethod
+    def generate_env_template():
+        key = os.urandom(32)
+        with open('.env', 'w') as f:
+            f.write(f"# HMAC Secret Key (32 bytes)\nHMAC_KEY={key.hex()}\n")
+        return key
+    
 class RSA_encryptor():
     def __init__(self, key_size=1024):
         self.public_key, self.private_key = newkeys(key_size)
