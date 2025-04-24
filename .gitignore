@@ -2,3 +2,6 @@
 .devcontainer/
 .env
 __pycache__
+
+# For testing
+Client*/

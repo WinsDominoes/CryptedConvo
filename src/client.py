@@ -23,7 +23,7 @@ class Client:
         self.rsa.set_public_key(server_public_key)
 
     def authenticate(self):
-        """ Handle the authentication (login/registration). """
+        """ Handle the authentication (login/registration).  """
         while True:
             print("\n1. LOGIN")
             print("2. REGISTER")
@@ -90,7 +90,7 @@ class Client:
 
     def send_private_message(self, target_user, message):
         """ Send a private message to a specific user. """
-        self.socket.send(self.rsa.encrypt_message(f"@{target_user} {message}"))
+        self.socket.send(self.rsa.encrypt_message(f"@{self.username} {target_user} {message}"))
 
     def handle_commands(self):
         """ Handle client commands like /list and /exit. """
@@ -112,13 +112,20 @@ class Client:
     def receive_messages(self):
         """ Receive and handle incoming messages from the server. """
         while True:
-            try:
-                message = self.rsa.decrypt_message(self.socket.recv(4096))
+            try:              
+                response = self.socket.recv(4096)
+                if response == b'':
+                    print(f"Connection error: Server closed socket")
+                    self.socket.close()
+                    break
+
+                message = self.rsa.decrypt_message(response)
                 if message:
                     if message.startswith("LISTED"):
                         print(f"Online users: {message[6:]}")
                     elif message.startswith("@"):
-                        print(f"[Private message] {message}")
+                        sender, message = message[1:].split(maxsplit=1)
+                        print(f"[Private message] @{sender}: {message}")
                     else:
                         print(f"[System] {message}")
             except Exception as e:
@@ -148,5 +155,5 @@ class Client:
             self.socket.close()
 
 if __name__ == "__main__":
-    client = Client()
+    client = Client('localhost', 12345)
     client.start()
